@@ -5,4 +5,4 @@ pages_build_output_dir = "./dist"
 [[d1_databases]]
 binding = "DB"
 database_name = "crm-db"
-database_id = "PLACEHOLDER"
+database_id = "0eb9177d-8c22-406a-a674-86ce9c2c336b"
