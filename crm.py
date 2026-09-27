@@ -380,7 +380,7 @@ class CRMRequestHandler(http.server.SimpleHTTPRequestHandler):
 def run_server():
     init_db()
     handler = CRMRequestHandler
-    with socketserver.TCPServer(("", PORT), handler) as httpd:
+    with http.server.ThreadingHTTPServer(("", PORT), handler) as httpd:
         print(f"🟢 CRM đang chạy tại http://localhost:{PORT} (Ctrl+C để tắt)")
         httpd.serve_forever()
 
