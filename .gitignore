@@ -1,3 +1,5 @@
-node_modules/
-.wrangler/
-.env
+crm.db
+patch.py
+test_crm.js
+__pycache__/
+*.pyc

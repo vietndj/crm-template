@@ -8,15 +8,14 @@ import threading
 import os
 import sys
 import uuid
-import datetime
 import time
+from datetime import datetime
 
 PORT = 8899
 DB_FILE = 'crm.db'
 MASTER_PASSWORD = '1234'
 DIST_DIR = 'dist'
 
-# Load DB Schema
 SCHEMA = """
 -- Bảng leads chính
 CREATE TABLE IF NOT EXISTS leads (
@@ -166,11 +165,11 @@ class CRMRequestHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         
-        # Wrap data in success/data format expected by frontend
-        if status >= 200 and status < 300:
+        if 200 <= status < 300:
             out = {"success": True, "data": data}
         else:
-            out = {"success": False, "error": data.get("error", "Error") if isinstance(data, dict) else str(data)}
+            err = data.get("error", "Error") if isinstance(data, dict) else str(data)
+            out = {"success": False, "error": err}
             
         self.wfile.write(json.dumps(out).encode('utf-8'))
 
@@ -190,204 +189,245 @@ class CRMRequestHandler(http.server.SimpleHTTPRequestHandler):
         sess = conn.execute("SELECT * FROM sessions WHERE token = ?", (token,)).fetchone()
         conn.close()
         return sess is not None
-
+        
     def do_GET(self):
-        parsed_path = urllib.parse.urlparse(self.path)
-        path = parsed_path.path
-
-        if not path.startswith('/api/'):
-            # Fallback to index.html for SPA if not found
-            if not os.path.exists(os.path.join(self.directory, path.lstrip('/'))) and not path.endswith('.js') and not path.endswith('.css'):
-                self.path = '/index.html'
-            return super().do_GET()
-
-        if not self.check_auth() and path != '/api/auth':
-            return self.send_json(401, {"error": "Unauthorized"})
-
-        query = urllib.parse.parse_qs(parsed_path.query)
-        conn = get_db()
         try:
-            if path == '/api/leads':
-                if 'id' in query:
-                    lead = conn.execute("SELECT * FROM leads WHERE id = ? AND deleted_at IS NULL", (query['id'][0],)).fetchone()
+            parsed_path = urllib.parse.urlparse(self.path)
+            path = parsed_path.path
+
+            if not path.startswith('/api/'):
+                if not os.path.exists(os.path.join(self.directory, path.lstrip('/'))) and not path.endswith('.js') and not path.endswith('.css'):
+                    self.path = '/index.html'
+                return super().do_GET()
+
+            if not self.check_auth() and path != '/api/auth':
+                return self.send_json(401, {"error": "Unauthorized"})
+
+            query = urllib.parse.parse_qs(parsed_path.query)
+            conn = get_db()
+            try:
+                if path == '/api/leads':
+                    if 'id' in query:
+                        lead = conn.execute("SELECT * FROM leads WHERE id = ? AND deleted_at IS NULL", (query['id'][0],)).fetchone()
+                        if lead:
+                            return self.send_json(200, dict(lead))
+                        return self.send_json(404, {"error": "Not found"})
+                    else:
+                        q = query.get('q', [''])[0]
+                        status = query.get('status', [''])[0]
+                        sql = "SELECT * FROM leads WHERE deleted_at IS NULL"
+                        params = []
+                        if q:
+                            sql += " AND (name LIKE ? OR phone LIKE ? OR email LIKE ?)"
+                            params.extend([f"%{q}%", f"%{q}%", f"%{q}%"])
+                        if status:
+                            sql += " AND status = ?"
+                            params.append(status)
+                        sql += " ORDER BY updated_at DESC"
+                        leads = [dict(r) for r in conn.execute(sql, params).fetchall()]
+                        return self.send_json(200, leads)
+                
+                elif path.startswith('/api/leads/'):
+                    lead_id = path.split('/')[-1]
+                    lead = conn.execute("SELECT * FROM leads WHERE id = ? AND deleted_at IS NULL", (lead_id,)).fetchone()
                     if lead:
                         return self.send_json(200, dict(lead))
                     return self.send_json(404, {"error": "Not found"})
+
+                elif path == '/api/interactions':
+                    lead_id = query.get('lead_id', [''])[0]
+                    if lead_id:
+                        interactions = [dict(r) for r in conn.execute("SELECT * FROM interactions WHERE lead_id = ? ORDER BY created_at DESC", (lead_id,)).fetchall()]
+                        return self.send_json(200, interactions)
+                    return self.send_json(400, {"error": "Missing lead_id"})
+
+                elif path == '/api/stats':
+                    total = conn.execute("SELECT COUNT(*) as c FROM leads WHERE deleted_at IS NULL").fetchone()['c']
+                    return self.send_json(200, {"total_leads": total})
+
+                elif path == '/api/config':
+                    config = {r['key']: r['value'] for r in conn.execute("SELECT * FROM config").fetchall()}
+                    return self.send_json(200, config)
+
                 else:
-                    q = query.get('q', [''])[0]
-                    status = query.get('status', [''])[0]
-                    sql = "SELECT * FROM leads WHERE deleted_at IS NULL"
-                    params = []
-                    if q:
-                        sql += " AND (name LIKE ? OR phone LIKE ? OR email LIKE ?)"
-                        params.extend([f"%{q}%", f"%{q}%", f"%{q}%"])
-                    if status:
-                        sql += " AND status = ?"
-                        params.append(status)
-                    sql += " ORDER BY updated_at DESC"
-                    leads = [dict(r) for r in conn.execute(sql, params).fetchall()]
-                    return self.send_json(200, leads)
-            
-            elif path.startswith('/api/leads/'):
-                lead_id = path.split('/')[-1]
-                lead = conn.execute("SELECT * FROM leads WHERE id = ? AND deleted_at IS NULL", (lead_id,)).fetchone()
-                if lead:
-                    return self.send_json(200, dict(lead))
-                return self.send_json(404, {"error": "Not found"})
-
-            elif path == '/api/interactions':
-                lead_id = query.get('lead_id', [''])[0]
-                if lead_id:
-                    interactions = [dict(r) for r in conn.execute("SELECT * FROM interactions WHERE lead_id = ? ORDER BY created_at DESC", (lead_id,)).fetchall()]
-                    return self.send_json(200, interactions)
-                return self.send_json(400, {"error": "Missing lead_id"})
-
-            elif path == '/api/stats':
-                total = conn.execute("SELECT COUNT(*) as c FROM leads WHERE deleted_at IS NULL").fetchone()['c']
-                return self.send_json(200, {"total_leads": total})
-
-            elif path == '/api/config':
-                config = {r['key']: r['value'] for r in conn.execute("SELECT * FROM config").fetchall()}
-                return self.send_json(200, config)
-
-            else:
-                return self.send_json(404, {"error": "Endpoint not found"})
-        finally:
-            conn.close()
+                    return self.send_json(404, {"error": "Endpoint not found"})
+            finally:
+                conn.close()
+        except Exception as e:
+            print(f"Error GET: {e}")
+            self.send_json(500, {"error": str(e)})
 
     def do_POST(self):
-        parsed_path = urllib.parse.urlparse(self.path)
-        path = parsed_path.path
-
-        if not path.startswith('/api/'):
-            return self.send_json(404, {"error": "Not found"})
-
         try:
-            data = self.read_json()
-        except:
-            return self.send_json(400, {"error": "Invalid JSON"})
+            parsed_path = urllib.parse.urlparse(self.path)
+            path = parsed_path.path
 
-        if path == '/api/auth':
-            if data.get('password') == MASTER_PASSWORD:
-                token = str(uuid.uuid4())
-                conn = get_db()
-                conn.execute("INSERT INTO sessions (token) VALUES (?)", (token,))
-                conn.commit()
-                conn.close()
-                return self.send_json(200, {"token": token})
-            return self.send_json(401, {"error": "Invalid password"})
+            if not path.startswith('/api/'):
+                return self.send_json(404, {"error": "Not found"})
 
-        if not self.check_auth():
-            return self.send_json(401, {"error": "Unauthorized"})
+            try:
+                data = self.read_json()
+            except:
+                return self.send_json(400, {"error": "Invalid JSON"})
 
-        conn = get_db()
-        try:
-            if path == '/api/leads':
-                uid = str(uuid.uuid4())[:16]
-                fields = ['name', 'phone', 'email', 'company', 'source', 'status']
-                vals = [data.get(f, '') for f in fields]
-                conn.execute(f"INSERT INTO leads (id, {','.join(fields)}) VALUES (?, ?, ?, ?, ?, ?, ?)", [uid] + vals)
-                conn.commit()
-                return self.send_json(200, {"id": uid, "status": "created"})
+            if path == '/api/auth':
+                if data.get('password') == MASTER_PASSWORD:
+                    token = str(uuid.uuid4())
+                    conn = get_db()
+                    conn.execute("INSERT INTO sessions (token) VALUES (?)", (token,))
+                    conn.commit()
+                    conn.close()
+                    return self.send_json(200, {"token": token})
+                return self.send_json(401, {"error": "Invalid password"})
 
-            elif path == '/api/interactions':
-                uid = str(uuid.uuid4())[:16]
-                fields = ['lead_id', 'type', 'content', 'direction']
-                vals = [data.get(f, '') for f in fields]
-                conn.execute(f"INSERT INTO interactions (id, {','.join(fields)}) VALUES (?, ?, ?, ?, ?)", [uid] + vals)
-                conn.commit()
-                return self.send_json(200, {"id": uid, "status": "created"})
+            if not self.check_auth():
+                return self.send_json(401, {"error": "Unauthorized"})
 
-            elif path == '/api/import':
-                rows = data.get('data', [])
-                mapping = data.get('mapping', {})
-                imported = 0
-                for row in rows:
+            conn = get_db()
+            try:
+                if path == '/api/leads':
                     uid = str(uuid.uuid4())[:16]
-                    name = row.get(mapping.get('name', ''), 'Unknown')
-                    phone = row.get(mapping.get('phone', ''), '')
-                    email = row.get(mapping.get('email', ''), '')
-                    conn.execute("INSERT INTO leads (id, name, phone, email) VALUES (?, ?, ?, ?)", (uid, name, phone, email))
-                    imported += 1
-                conn.commit()
-                return self.send_json(200, {"imported": imported})
+                    fields = ['name', 'phone', 'email', 'company', 'source', 'status']
+                    vals = [data.get(f, '') for f in fields]
+                    if not vals[0]: vals[0] = 'No Name'
+                    
+                    conn.execute(f"INSERT INTO leads (id, {','.join(fields)}) VALUES (?, ?, ?, ?, ?, ?, ?)", [uid] + vals)
+                    conn.commit()
+                    return self.send_json(200, {"id": uid, "status": "created"})
 
-            else:
-                return self.send_json(404, {"error": "Endpoint not found"})
-        finally:
-            conn.close()
+                elif path == '/api/interactions':
+                    uid = str(uuid.uuid4())[:16]
+                    fields = ['lead_id', 'type', 'content', 'direction']
+                    vals = [data.get(f, '') for f in fields]
+                    conn.execute(f"INSERT INTO interactions (id, {','.join(fields)}) VALUES (?, ?, ?, ?, ?)", [uid] + vals)
+                    conn.commit()
+                    return self.send_json(200, {"id": uid, "status": "created"})
+
+                elif path == '/api/import':
+                    rows = data.get('data', [])
+                    mapping = data.get('mapping', {})
+                    imported = 0
+                    
+                    def get_val(row, map_val):
+                        if not map_val and map_val != 0: return ''
+                        if isinstance(map_val, int) or (isinstance(map_val, str) and map_val.isdigit()):
+                            try:
+                                return list(row.values())[int(map_val)]
+                            except:
+                                return ''
+                        return row.get(map_val, '')
+                        
+                    for row in rows:
+                        uid = str(uuid.uuid4())[:16]
+                        name = get_val(row, mapping.get('name'))
+                        if not name: name = 'Unknown'
+                        phone = get_val(row, mapping.get('phone'))
+                        email = get_val(row, mapping.get('email'))
+                        source = get_val(row, mapping.get('source'))
+                        status = get_val(row, mapping.get('status'))
+                        if not status: status = 'new'
+                        if not source: source = 'import'
+                        
+                        conn.execute("INSERT INTO leads (id, name, phone, email, source, status) VALUES (?, ?, ?, ?, ?, ?)", (uid, name, phone, email, source, status))
+                        imported += 1
+                    conn.commit()
+                    return self.send_json(200, {"imported": imported})
+
+                else:
+                    return self.send_json(404, {"error": "Endpoint not found"})
+            finally:
+                conn.close()
+        except Exception as e:
+            print(f"Error POST: {e}")
+            self.send_json(500, {"error": str(e)})
 
     def do_PUT(self):
-        parsed_path = urllib.parse.urlparse(self.path)
-        path = parsed_path.path
-
-        if not self.check_auth():
-            return self.send_json(401, {"error": "Unauthorized"})
-
         try:
-            data = self.read_json()
-        except:
-            return self.send_json(400, {"error": "Invalid JSON"})
+            parsed_path = urllib.parse.urlparse(self.path)
+            path = parsed_path.path
 
-        conn = get_db()
-        try:
-            if path.startswith('/api/leads/'):
-                lead_id = path.split('/')[-1]
-                updates = []
-                params = []
-                for k, v in data.items():
-                    if k in ['name', 'phone', 'email', 'company', 'source', 'status']:
-                        updates.append(f"{k} = ?")
-                        params.append(v)
-                if updates:
-                    updates.append("updated_at = datetime('now')")
-                    params.append(lead_id)
-                    conn.execute(f"UPDATE leads SET {', '.join(updates)} WHERE id = ?", params)
+            if not self.check_auth():
+                return self.send_json(401, {"error": "Unauthorized"})
+
+            try:
+                data = self.read_json()
+            except:
+                return self.send_json(400, {"error": "Invalid JSON"})
+
+            conn = get_db()
+            try:
+                if path.startswith('/api/leads/'):
+                    lead_id = path.split('/')[-1]
+                    updates = []
+                    params = []
+                    for k, v in data.items():
+                        if k in ['name', 'phone', 'email', 'company', 'source', 'status']:
+                            updates.append(f"{k} = ?")
+                            params.append(v)
+                    if updates:
+                        updates.append("updated_at = datetime('now')")
+                        params.append(lead_id)
+                        conn.execute(f"UPDATE leads SET {', '.join(updates)} WHERE id = ?", params)
+                        conn.commit()
+                        return self.send_json(200, {"status": "updated"})
+                    return self.send_json(400, {"error": "No valid fields to update"})
+
+                elif path == '/api/config':
+                    for k, v in data.items():
+                        conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", (k, str(v)))
                     conn.commit()
                     return self.send_json(200, {"status": "updated"})
-                return self.send_json(400, {"error": "No valid fields to update"})
 
-            elif path == '/api/config':
-                for k, v in data.items():
-                    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", (k, str(v)))
-                conn.commit()
-                return self.send_json(200, {"status": "updated"})
-
-            else:
-                return self.send_json(404, {"error": "Endpoint not found"})
-        finally:
-            conn.close()
+                else:
+                    return self.send_json(404, {"error": "Endpoint not found"})
+            finally:
+                conn.close()
+        except Exception as e:
+            print(f"Error PUT: {e}")
+            self.send_json(500, {"error": str(e)})
 
     def do_DELETE(self):
-        parsed_path = urllib.parse.urlparse(self.path)
-        path = parsed_path.path
-
-        if not self.check_auth():
-            return self.send_json(401, {"error": "Unauthorized"})
-
-        conn = get_db()
         try:
-            if path.startswith('/api/leads/'):
-                lead_id = path.split('/')[-1]
-                conn.execute("UPDATE leads SET deleted_at = datetime('now') WHERE id = ?", (lead_id,))
-                conn.commit()
-                return self.send_json(200, {"status": "deleted"})
-            else:
-                return self.send_json(404, {"error": "Endpoint not found"})
-        finally:
-            conn.close()
+            parsed_path = urllib.parse.urlparse(self.path)
+            path = parsed_path.path
+
+            if not self.check_auth():
+                return self.send_json(401, {"error": "Unauthorized"})
+
+            conn = get_db()
+            try:
+                if path.startswith('/api/leads/'):
+                    lead_id = path.split('/')[-1]
+                    conn.execute("UPDATE leads SET deleted_at = datetime('now') WHERE id = ?", (lead_id,))
+                    conn.commit()
+                    return self.send_json(200, {"status": "deleted"})
+                else:
+                    return self.send_json(404, {"error": "Endpoint not found"})
+            finally:
+                conn.close()
+        except Exception as e:
+            print(f"Error DELETE: {e}")
+            self.send_json(500, {"error": str(e)})
+
+class ThreadedHTTPServer(http.server.ThreadingHTTPServer):
+    allow_reuse_address = True
+    daemon_threads = True
 
 def run_server():
     init_db()
     handler = CRMRequestHandler
-    with http.server.ThreadingHTTPServer(("", PORT), handler) as httpd:
+    with ThreadedHTTPServer(("", PORT), handler) as httpd:
         print(f"🟢 CRM đang chạy tại http://localhost:{PORT} (Ctrl+C để tắt)")
         httpd.serve_forever()
 
-if __name__ == '__main__':
-    threading.Thread(target=run_server, daemon=True).start()
+if __name__ == "__main__":
+    server_thread = threading.Thread(target=run_server)
+    server_thread.daemon = True
+    server_thread.start()
+    
     time.sleep(1)
     webbrowser.open(f'http://localhost:{PORT}')
+    
     try:
         while True:
             time.sleep(1)
