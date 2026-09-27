@@ -94,6 +94,45 @@ AI:
 
 ## Import Dữ Liệu (CRM IMPORT)
 
+### Từ Facebook — 3 cách không ma sát (KHÔNG cần tạo Facebook App)
+
+**Cách 1 — Copy-paste đoạn chat (Dễ nhất, dùng ngay):**
+```
+User: copy đoạn chat từ Messenger rồi dán vào AI:
+"Chào shop, mình Tuấn 0901234567, hỏi khóa offline tháng 10 còn chỗ không ạ?"
+Sau đó nói: "Lưu khách này lại"
+
+AI tự động:
+→ Parse: name="Tuấn", phone="0901234567", note="Hỏi khóa offline tháng 10"
+→ POST /api/leads {source: "facebook"}
+→ ✅ Đã lưu khách Tuấn
+```
+
+**Cách 2 — Chụp ảnh inbox Messenger rồi gửi cho AI (Siêu lười):**
+```
+User: chụp màn hình hộp thư Messenger → gửi ảnh vào Antigravity
+Nói: "Lưu hết khách trong ảnh này"
+
+AI dùng Vision đọc ảnh:
+→ Nhặt tên + SĐT từng người nhắn tin
+→ Batch POST /api/import
+→ ✅ Đã lưu 5 khách từ ảnh inbox
+```
+
+**Cách 3 — Tải CSV từ Facebook Leads Center (Cho Lead Ads, 100 khách/lần):**
+```
+Bước 1: Meta Business Suite → Leads Center → Tải xuống file CSV
+Bước 2: User nói: "CRM IMPORT file leads_facebook.csv"
+
+AI:
+1. Đọc CSV, map cột name/phone/email
+2. POST /api/import { rows: [...], source: "facebook_csv" }
+3. ✅ Import 150 leads từ Facebook Lead Ads, bỏ qua 3 trùng SĐT
+```
+
+> Không cần tạo Facebook App, không cần developer, không cần webhook setup.
+> Facebook Webhook (tự động 100%) chỉ bật khi user yêu cầu ở giai đoạn nâng cao.
+
 ### Từ Excel/CSV (qua AI)
 ```
 User: CRM IMPORT file leads.xlsx
