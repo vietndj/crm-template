@@ -165,7 +165,14 @@ class CRMRequestHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header('Content-Type', 'application/json')
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
-        self.wfile.write(json.dumps(data).encode('utf-8'))
+        
+        # Wrap data in success/data format expected by frontend
+        if status >= 200 and status < 300:
+            out = {"success": True, "data": data}
+        else:
+            out = {"success": False, "error": data.get("error", "Error") if isinstance(data, dict) else str(data)}
+            
+        self.wfile.write(json.dumps(out).encode('utf-8'))
 
     def read_json(self):
         content_length = int(self.headers.get('Content-Length', 0))
